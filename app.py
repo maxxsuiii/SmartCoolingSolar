@@ -44,74 +44,70 @@ with st.sidebar:
     st.markdown("**Device:** ESP32 + INA219")
     st.markdown("**Repo:** maxxsuiii/SmartCoolingSolar")
     st.divider()
-    # Live status indicator
     status = st.empty()
 
 st.title("Smart Cooling Solar Monitor")
 st.caption("ESP32 + INA219 · real-time solar monitoring")
 
-# ── Placeholders — these get updated in place, no page reload ──
-top_placeholder    = st.empty()
-divider_ph         = st.empty()
-chart_placeholder  = st.empty()
-col_placeholder    = st.empty()
-table_placeholder  = st.empty()
+# ── Placeholders ───────────────────────────────────────
+metrics_ph = st.empty()
+div_ph     = st.empty()
+power_ph   = st.empty()
+cols_ph    = st.empty()
+table_ph   = st.empty()
 
 # ── Real-time loop ─────────────────────────────────────
+iteration = 0
 while True:
     latest = get_latest()
     df     = get_history()
 
-    if not latest:
-        with top_placeholder.container():
+    with metrics_ph.container():
+        if not latest:
             st.warning("No data yet — waiting for ESP32 to connect.")
-    else:
-        # ── Metric cards ──────────────────────────────
-        with top_placeholder.container():
+        else:
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Voltage",   f"{float(latest['voltage']):.2f} V")
-            col2.metric("Current",   f"{float(latest['current']):.0f} mA")
-            col3.metric("Power",     f"{float(latest['power']):.2f} W")
-            col4.metric("Readings",  len(df))
+            col1.metric("Voltage",  f"{float(latest['voltage']):.2f} V")
+            col2.metric("Current",  f"{float(latest['current']):.0f} mA")
+            col3.metric("Power",    f"{float(latest['power']):.2f} W")
+            col4.metric("Readings", len(df))
 
-        divider_ph.divider()
+    if latest and not df.empty:
+        div_ph.divider()
 
-        # ── Power chart ───────────────────────────────
-        if not df.empty:
-            with chart_placeholder.container():
-                st.subheader("Power output history")
-                fig = px.area(df, y="power",
-                              labels={"power": "Power (W)", "index": ""},
-                              color_discrete_sequence=["#1D9E75"])
-                fig.update_layout(height=280, margin=dict(l=0, r=0, t=0, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+        with power_ph.container():
+            st.subheader("Power output history")
+            fig = px.area(df, y="power",
+                          labels={"power": "Power (W)", "index": ""},
+                          color_discrete_sequence=["#1D9E75"])
+            fig.update_layout(height=280, margin=dict(l=0, r=0, t=0, b=0))
+            # unique key per iteration so Streamlit never sees duplicates
+            st.plotly_chart(fig, width="stretch", key=f"power_{iteration}")
 
-            # ── Voltage + Current side by side ────────
-            with col_placeholder.container():
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.subheader("Voltage")
-                    fig2 = px.line(df, y="voltage",
-                                   color_discrete_sequence=["#BA7517"])
-                    fig2.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
-                    st.plotly_chart(fig2, use_container_width=True)
-                with c2:
-                    st.subheader("Current")
-                    fig3 = px.line(df, y="current",
-                                   color_discrete_sequence=["#534AB7"])
-                    fig3.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
-                    st.plotly_chart(fig3, use_container_width=True)
+        with cols_ph.container():
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Voltage")
+                fig2 = px.line(df, y="voltage",
+                               color_discrete_sequence=["#BA7517"])
+                fig2.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(fig2, width="stretch", key=f"voltage_{iteration}")
+            with c2:
+                st.subheader("Current")
+                fig3 = px.line(df, y="current",
+                               color_discrete_sequence=["#534AB7"])
+                fig3.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(fig3, width="stretch", key=f"current_{iteration}")
 
-            # ── Raw data table ────────────────────────
-            with table_placeholder.container():
-                with st.expander("Raw data table"):
-                    st.dataframe(df[::-1], use_container_width=True)
+        with table_ph.container():
+            with st.expander("Raw data table"):
+                st.dataframe(df[::-1], width="stretch")
 
-    # ── Live status in sidebar ────────────────────────
     status.markdown(
-        f"<div style='font-size:12px;color:gray'>Last updated:<br>{pd.Timestamp.now().strftime('%H:%M:%S')}</div>",
+        f"<div style='font-size:12px;color:gray'>Last updated:<br>"
+        f"{pd.Timestamp.now().strftime('%H:%M:%S')}</div>",
         unsafe_allow_html=True
     )
 
-    # ── Wait then repeat — no page reload needed ──────
+    iteration += 1
     time.sleep(refresh_rate)
