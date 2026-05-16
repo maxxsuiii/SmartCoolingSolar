@@ -179,5 +179,25 @@ while True:
                 ]
                 st.dataframe(display_df[::-1], width="stretch")
 
+                st.divider()
+
+                col_del1, col_del2 = st.columns([3, 1])
+                with col_del1:
+                    st.caption(f"Total records: {len(df)} readings stored in Firebase")
+                with col_del2:
+                    if st.button("🗑 Delete all history", key=f"del_{iteration}",
+                                 type="primary", use_container_width=True):
+                        try:
+                            auth = get_auth()
+                            r = requests.delete(
+                                f"{FIREBASE_URL}/solar/history.json?auth={auth}",
+                                timeout=5
+                            )
+                            if r.status_code == 200:
+                                st.success("History cleared!")
+                            else:
+                                st.error(f"Failed: HTTP {r.status_code}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
     iteration += 1
     time.sleep(ESP32_INTERVAL)
