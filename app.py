@@ -7,8 +7,8 @@ import os
 
 st.set_page_config(page_title="Smart Cooling Solar", page_icon="☀️", layout="wide")
 
-FIREBASE_URL  = "https://solar-monitor-641e3-default-rtdb.asia-southeast1.firebasedatabase.app"
-ESP32_INTERVAL = 5  # must match INTERVAL in ESP32 firmware (seconds)
+FIREBASE_URL   = "https://solar-monitor-641e3-default-rtdb.asia-southeast1.firebasedatabase.app"
+ESP32_INTERVAL = 5
 
 def get_auth():
     try:
@@ -29,12 +29,14 @@ def get_history():
         if r.status_code == 200 and r.json():
             rows = list(r.json().values())
             df = pd.DataFrame(rows)
-            df["voltage"] = pd.to_numeric(df["voltage"], errors="coerce")
-            df["current"] = pd.to_numeric(df["current"], errors="coerce")
-            df["power"]   = pd.to_numeric(df["power"],   errors="coerce")
-            df["uptime"]  = pd.to_numeric(df["uptime"],  errors="coerce")
-            df = df.reset_index(drop=True)
-            return df.tail(200)
+            for col in ["voltage", "current", "power", "energy", "uptime"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                else:
+                    df[col] = 0.0
+            if "time" not in df.columns:
+                df["time"] = "—"
+            return df.tail(200).reset_index(drop=True)
     except:
         pass
     return pd.DataFrame()
@@ -46,68 +48,58 @@ def uptime_str(seconds):
     m, sec = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{sec:02d}"
 
-def device_status(latest):
-    """Returns online/offline based on last uptime change."""
-    if not latest:
-        return "offline", "🔴"
-    return "online", "🟢"
-
 # ── Sidebar ────────────────────────────────────────────
 with st.sidebar:
     st.header("Settings")
-    st.info(f"ESP32 sends every **{ESP32_INTERVAL}s**\nDashboard syncs at same rate.")
+    st.info(f"ESP32 sends every **{ESP32_INTERVAL}s**")
     st.divider()
     st.markdown("**Device:** ESP32 + INA219")
+    st.markdown("**Location:** Malaysia (UTC+8)")
     st.markdown("**Repo:** maxxsuiii/SmartCoolingSolar")
     st.divider()
-    device_ph  = st.empty()   # online/offline badge
-    uptime_ph  = st.empty()   # ESP32 uptime
-    updated_ph = st.empty()   # last fetch time
+    device_ph  = st.empty()
+    uptime_ph  = st.empty()
+    updated_ph = st.empty()
 
 st.title("Smart Cooling Solar Monitor")
-st.caption("ESP32 + INA219 · synchronized real-time monitoring")
+st.caption("ESP32 + INA219 · Malaysia time (UTC+8)")
 
-# ── Placeholders ───────────────────────────────────────
 alert_ph   = st.empty()
 metrics_ph = st.empty()
+energy_ph  = st.empty()
 div_ph     = st.empty()
 power_ph   = st.empty()
 cols_ph    = st.empty()
+energy_chart_ph = st.empty()
 table_ph   = st.empty()
 
-# ── Real-time loop — synced to ESP32 interval ──────────
-iteration  = 0
+iteration   = 0
 prev_uptime = None
 
 while True:
     latest = get_latest()
     df     = get_history()
 
-    # ── Device status ──────────────────────────────────
-    status_text, status_icon = device_status(latest)
-    device_ph.markdown(
-        f"**Status:** {status_icon} {status_text.upper()}"
-    )
-
+    # ── Sidebar ────────────────────────────────────────
     if latest:
         current_uptime = latest.get("uptime")
+        last_time      = latest.get("time", "—")
 
-        # Warn if ESP32 stopped sending (uptime unchanged)
         if prev_uptime is not None and current_uptime == prev_uptime:
-            alert_ph.warning("ESP32 may have stopped sending data.")
+            device_ph.markdown("**Status:** 🔴 OFFLINE")
+            alert_ph.warning("ESP32 stopped sending. Check your device.")
         else:
+            device_ph.markdown("**Status:** 🟢 ONLINE")
             alert_ph.empty()
 
         prev_uptime = current_uptime
-        uptime_ph.markdown(f"**ESP32 uptime:** `{uptime_str(current_uptime)}`")
+        uptime_ph.markdown(f"**Uptime:** `{uptime_str(current_uptime)}`")
+        updated_ph.markdown(f"**Last reading:**\n\n`{last_time}`")
+    else:
+        device_ph.markdown("**Status:** 🔴 OFFLINE")
+        updated_ph.markdown("**Last reading:** —")
 
-    updated_ph.markdown(
-        f"<div style='font-size:12px;color:gray'>Dashboard synced:<br>"
-        f"{pd.Timestamp.now().strftime('%H:%M:%S')}</div>",
-        unsafe_allow_html=True
-    )
-
-    # ── Metrics ────────────────────────────────────────
+    # ── Metric cards (row 1) ───────────────────────────
     with metrics_ph.container():
         if not latest:
             st.warning("No data yet — waiting for ESP32 to connect.")
@@ -118,39 +110,74 @@ while True:
             col3.metric("Power",    f"{float(latest['power']):.2f} W")
             col4.metric("Readings", len(df))
 
+    # ── Energy summary (row 2) ─────────────────────────
+    if latest and not df.empty:
+        total_energy = float(latest.get("energy", 0))
+        session_peak = float(df["power"].max())
+        avg_power    = float(df["power"].mean())
+
+        with energy_ph.container():
+            st.subheader("Energy summary")
+            e1, e2, e3 = st.columns(3)
+            e1.metric(
+                "Total energy",
+                f"{total_energy:.2f} Wh" if total_energy < 1000
+                else f"{total_energy/1000:.3f} kWh"
+            )
+            e2.metric("Peak power",   f"{session_peak:.2f} W")
+            e3.metric("Average power", f"{avg_power:.2f} W")
+
     # ── Charts ─────────────────────────────────────────
     if latest and not df.empty:
         div_ph.divider()
 
         with power_ph.container():
             st.subheader("Power output history")
-            fig = px.area(df, y="power",
-                          labels={"power": "Power (W)", "index": "Reading"},
+            fig = px.area(df, x="time", y="power",
+                          labels={"power": "Power (W)", "time": "Malaysia Time"},
                           color_discrete_sequence=["#1D9E75"])
-            fig.update_layout(height=280, margin=dict(l=0, r=0, t=0, b=0))
+            fig.update_layout(height=260, margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(fig, width="stretch", key=f"power_{iteration}")
 
         with cols_ph.container():
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("Voltage")
-                fig2 = px.line(df, y="voltage",
+                fig2 = px.line(df, x="time", y="voltage",
+                               labels={"voltage": "V", "time": ""},
                                color_discrete_sequence=["#BA7517"])
                 fig2.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig2, width="stretch", key=f"voltage_{iteration}")
             with c2:
                 st.subheader("Current")
-                fig3 = px.line(df, y="current",
+                fig3 = px.line(df, x="time", y="current",
+                               labels={"current": "mA", "time": ""},
                                color_discrete_sequence=["#534AB7"])
                 fig3.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
                 st.plotly_chart(fig3, width="stretch", key=f"current_{iteration}")
 
+        with energy_chart_ph.container():
+            st.subheader("Cumulative energy (Wh)")
+            fig4 = px.area(df, x="time", y="energy",
+                           labels={"energy": "Energy (Wh)", "time": "Malaysia Time"},
+                           color_discrete_sequence=["#534AB7"])
+            fig4.update_layout(height=220, margin=dict(l=0, r=0, t=0, b=0))
+            st.plotly_chart(fig4, width="stretch", key=f"energy_{iteration}")
+
         with table_ph.container():
             with st.expander("Raw data table"):
-                display_df = df[["uptime","voltage","current","power"]].copy()
+                display_df = df[["time", "uptime", "voltage",
+                                 "current", "power", "energy"]].copy()
                 display_df["uptime"] = display_df["uptime"].apply(uptime_str)
-                display_df.columns = ["Uptime","Voltage (V)","Current (mA)","Power (W)"]
+                display_df["energy"] = display_df["energy"].apply(
+                    lambda x: f"{x:.4f}" if not pd.isna(x) else "—"
+                )
+                display_df.columns = [
+                    "Malaysia Time", "Uptime",
+                    "Voltage (V)", "Current (mA)",
+                    "Power (W)", "Energy (Wh)"
+                ]
                 st.dataframe(display_df[::-1], width="stretch")
 
     iteration += 1
-    time.sleep(ESP32_INTERVAL)  # sleep exactly as long as ESP32 interval
+    time.sleep(ESP32_INTERVAL)
